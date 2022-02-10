@@ -49,4 +49,5 @@ import (
 	_ "github.com/observiq/stanza/operator/builtin/output/googlecloud"
 	_ "github.com/observiq/stanza/operator/builtin/output/newrelic"
 	_ "github.com/observiq/stanza/operator/builtin/output/stdout"
+    _ "github.com/henrikrexed/Stanza-dynatrace/operator/builtin/output/dynatrace"
 )

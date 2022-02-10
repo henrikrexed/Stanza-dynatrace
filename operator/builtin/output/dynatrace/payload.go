@@ -1,4 +1,4 @@
-package newrelic
+package dynatrace
 
 import (
 	"github.com/observiq/stanza/entry"
