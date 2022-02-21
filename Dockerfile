@@ -15,6 +15,7 @@ RUN curl -fL "${plugins_url}" -o stanza-plugins.zip
 RUN unzip stanza-plugins.zip
 WORKDIR /stanza
 COPY . .
+RUN go mod tidy
 RUN make build
 RUN mv "artifacts/stanza_$(go env GOOS)_$(go env GOARCH)" artifacts/stanza
 

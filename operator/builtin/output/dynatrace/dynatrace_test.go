@@ -17,9 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewRelicConfigBuild(t *testing.T) {
+
+func TestDynatraceConfigBuild(t *testing.T) {
 	t.Run("OutputConfigError", func(t *testing.T) {
-		cfg := NewNewRelicOutputConfig("test")
+		cfg := NewDynatraceOutputConfig("test")
 		cfg.OperatorType = ""
 		_, err := cfg.Build(testutil.NewBuildContext(t))
 		require.Error(t, err)
@@ -27,14 +28,14 @@ func TestNewRelicConfigBuild(t *testing.T) {
 	})
 
 	t.Run("MissingKey", func(t *testing.T) {
-		cfg := NewNewRelicOutputConfig("test")
+		cfg := NewDynatraceOutputConfig("test")
 		_, err := cfg.Build(testutil.NewBuildContext(t))
 		require.Error(t, err)
-		require.Equal(t, err.Error(), "one of 'api_key' or 'license_key' is required")
+		require.Equal(t, err.Error(), "one of 'api_key' is required")
 	})
 
 	t.Run("InvalidURL", func(t *testing.T) {
-		cfg := NewNewRelicOutputConfig("test")
+		cfg := NewDynatraceOutputConfig("test")
 		cfg.LicenseKey = "testkey"
 		cfg.BaseURI = `%^&*($@)`
 		_, err := cfg.Build(testutil.NewBuildContext(t))
@@ -43,10 +44,10 @@ func TestNewRelicConfigBuild(t *testing.T) {
 	})
 }
 
-func TestNewRelicOutput(t *testing.T) {
+func TestDynatraceOutput(t *testing.T) {
 	cases := []struct {
 		name     string
-		cfgMod   func(*NewRelicOutputConfig)
+		cfgMod   func(*NewDynatraceOutputConfig)
 		input    []*entry.Entry
 		expected string
 	}{
@@ -73,7 +74,7 @@ func TestNewRelicOutput(t *testing.T) {
 		},
 		{
 			"CustomMessage",
-			func(cfg *NewRelicOutputConfig) {
+			func(cfg *NewDynatraceOutputConfig) {
 				cfg.MessageField = entry.NewRecordField("log")
 			},
 			[]*entry.Entry{{
@@ -94,7 +95,7 @@ func TestNewRelicOutput(t *testing.T) {
 			require.NoError(t, err)
 			defer ln.stop()
 
-			cfg := NewNewRelicOutputConfig("test")
+			cfg := NewDynatraceOutputConfig("test")
 			cfg.BufferConfig = buffer.Config{
 				Builder: func() buffer.Builder {
 					cfg := buffer.NewMemoryBufferConfig()
@@ -123,7 +124,7 @@ func TestNewRelicOutput(t *testing.T) {
 	}
 
 	t.Run("FailedTestConnection", func(t *testing.T) {
-		cfg := NewNewRelicOutputConfig("test")
+		cfg := NewDynatraceOutputConfig("test")
 		cfg.BaseURI = "http://localhost/log/v1"
 		cfg.APIKey = "testkey"
 

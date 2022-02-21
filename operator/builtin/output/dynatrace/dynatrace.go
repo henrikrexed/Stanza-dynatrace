@@ -2,16 +2,17 @@ package dynatrace
 
 import (
 	"bytes"
-	"compress/gzip"
+//	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+    "crypto/tls"
 	"net/url"
 	"sync"
 	"time"
-
+    "strings"
 	"github.com/observiq/stanza/entry"
 	"github.com/observiq/stanza/errors"
 	"github.com/observiq/stanza/operator"
@@ -21,6 +22,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const  (
+        defaultssl=  false
+		defaulttimestamp= false
+		defaultclusterid=""
+)
 func init() {
 	operator.Register("dynatrace_output", func() operator.Builder { return NewDynatraceOutputConfig("") })
 }
@@ -31,9 +37,11 @@ func NewDynatraceOutputConfig(operatorID string) *DynatraceOutputConfig {
 		OutputConfig:  helper.NewOutputConfig(operatorID, "dynatrace_output"),
 		BufferConfig:  buffer.NewConfig(),
 		FlusherConfig: flusher.NewConfig(),
-		SslVerify: false,
-		Injecttimestamp: false,
-		Timeout:       helper.NewDuration(10 * time.Second)
+		SslVerify: defaultssl,
+		ClusterID : defaultclusterid,
+		Injecttimestamp: defaulttimestamp,
+		Timeout:       helper.NewDuration(10 * time.Second),
+		MessageField:  entry.NewRecordField(),
 	}
 }
 
@@ -42,11 +50,13 @@ type DynatraceOutputConfig struct {
 	helper.OutputConfig `yaml:",inline"`
 	BufferConfig        buffer.Config  `json:"buffer" yaml:"buffer"`
 	FlusherConfig       flusher.Config `json:"flusher" yaml:"flusher"`
-	APIKey       string          `json:"api_key,omitempty"       yaml:"api_key,omitempty"`
-    BaseURI      string          `json:"base_uri,omitempty"      yaml:"base_uri,omitempty"`
+	APIKey       string         `json:"api_key,omitempty"       yaml:"api_key,omitempty"`
+    BaseURI      string        `json:"base_uri,omitempty"      yaml:"base_uri,omitempty"`
+    ClusterID    string        `json:"cluster_id,omitempty"      yaml:"cluster_id,omitempty"`
 	SslVerify    bool             `json:"sslverify,omitempty"      yaml:"sslverify,omitempty"`
 	Injecttimestamp bool     `json:"injectTimestamp,omitempty"      yaml:"injectTimestamp,omitempty"`
 	Timeout      helper.Duration `json:"timeout,omitempty"       yaml:"timeout,omitempty"`
+	MessageField entry.Field     `json:"message_field,omitempty" yaml:"message_field,omitempty"`
 }
 
 // Build will build a new NewRelicOutput
@@ -54,6 +64,14 @@ func (c DynatraceOutputConfig) Build(bc operator.BuildContext) ([]operator.Opera
 	outputOperator, err := c.OutputConfig.Build(bc)
 	if err != nil {
 		return nil, err
+	}
+
+
+
+    if strings.TrimSpace(c.APIKey) == "" {
+		return nil, errors.Wrap(err, "'api_key' cannot be empty")
+	} else {
+	    fmt.Println("API key : "+c.APIKey)
 	}
 
 	headers, err := c.getHeaders()
@@ -73,16 +91,20 @@ func (c DynatraceOutputConfig) Build(bc operator.BuildContext) ([]operator.Opera
 
 	flusher := c.FlusherConfig.Build(bc.Logger.SugaredLogger)
 	ctx, cancel := context.WithCancel(context.Background())
-
+    tr := &http.Transport{
+                    TLSClientConfig: &tls.Config{InsecureSkipVerify: !c.SslVerify},
+                }
 	nro := &DynatraceOutput{
 		OutputOperator: outputOperator,
 		buffer:         buffer,
 		flusher:        flusher,
-		client:         &http.Client{},
+		client:         &http.Client{Transport:tr},
 		headers:        headers,
 		url:            url,
 		timeout:        c.Timeout.Raw(),
+		messageField:   c.MessageField,
 		ctx:            ctx,
+		cluster_id:     c.ClusterID,
 		cancel:         cancel,
 	}
 
@@ -91,13 +113,16 @@ func (c DynatraceOutputConfig) Build(bc operator.BuildContext) ([]operator.Opera
 
 func (c DynatraceOutputConfig) getHeaders() (http.Header, error) {
 	headers := http.Header{
-				"accept": []string{"application/json; charset=utf-8"}
+				"accept": []string{"application/json; charset=utf-8"},
+				"Content-Type": []string{"application/json; charset=utf-8"},
 	}
 
 	if c.APIKey == ""  {
 		return nil, fmt.Errorf("api_key'  is required")
 	} else if c.APIKey != "" {
-		headers["Authorization"] = []string{"Api-Token ",c.APIKey}
+	    var token string
+	    token="Api-Token "+c.APIKey
+		headers["Authorization"] = []string{token}
 	}
 
 	return headers, nil
@@ -108,13 +133,12 @@ type DynatraceOutput struct {
 	helper.OutputOperator
 	buffer  buffer.Buffer
 	flusher *flusher.Flusher
-
 	client       *http.Client
 	url          *url.URL
+	cluster_id   string
 	headers      http.Header
 	timeout      time.Duration
-
-
+    messageField entry.Field
 	ctx    context.Context
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -122,9 +146,9 @@ type DynatraceOutput struct {
 
 // Start tests the connection to Dynatrace and begins flushing entries
 func (nro *DynatraceOutput) Start() error {
-	if err := nro.testConnection(); err != nil {
-		return fmt.Errorf("test connection: %s", err)
-	}
+	//if err := nro.testConnection(); err != nil {
+	//	return fmt.Errorf("test connection: %s", err)
+//	}
 
 	nro.wg.Add(1)
 	go func() {
@@ -186,6 +210,7 @@ func (nro *DynatraceOutput) feedFlusher(ctx context.Context) {
 				return nil
 			}
 
+
 			res, err := nro.client.Do(req)
 			if err != nil {
 				return err
@@ -205,18 +230,20 @@ func (nro *DynatraceOutput) feedFlusher(ctx context.Context) {
 
 // newRequest creates a new http.Request with the given context and entries
 func (nro *DynatraceOutput) newRequest(ctx context.Context, entries []*entry.Entry) (*http.Request, error) {
-	payload := LogPayloadFromEntries(entries, nro.messageField)
+	payload := LogPayloadFromEntries(entries, nro.messageField,nro.cluster_id)
 
 	var buf bytes.Buffer
-	wr := gzip.NewWriter(&buf)
-	enc := json.NewEncoder(wr)
+	//wr := gzip.NewWriter(&buf)
+	enc := json.NewEncoder(&buf)
+
 	if err := enc.Encode(payload); err != nil {
 		return nil, errors.Wrap(err, "encode payload")
 	}
-	if err := wr.Close(); err != nil {
-		return nil, err
-	}
+	//if err := wr.Close(); err != nil {
+	//	return nil, err
+	//}
 
+      fmt.Println("opayload =",buf.String())
 	req, err := http.NewRequestWithContext(ctx, "POST", nro.url.String(), &buf)
 	if err != nil {
 		return nil, err
